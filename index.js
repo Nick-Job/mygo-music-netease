@@ -464,7 +464,7 @@ async function myMusicCoversFor() {
     const [week, all, cloud] = await Promise.all([
       request("/api/v1/play/record", { uid: profile.id, type: 1 }, { keepSession: true }).catch(() => null),
       request("/api/v1/play/record", { uid: profile.id, type: 0 }, { keepSession: true }).catch(() => null),
-      request("/api/v1/cloud/get", { limit: 5, offset: 0 }, { keepSession: true }).catch(() => null),
+      request("/api/v1/cloud/get", { limit: 20, offset: 0 }, { keepSession: true }).catch(() => null),
     ]);
     const weekSong = Array.isArray(week?.weekData) ? week.weekData[0]?.song : null;
     const allSong = Array.isArray(all?.allData) ? all.allData[0]?.song : null;
