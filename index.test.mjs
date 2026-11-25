@@ -21,6 +21,7 @@ async function setup(handler, savedSession) {
       },
     },
     signInPrompt: (prompt) => prompts.push(prompt),
+    setting: (key) => "",
   };
   globalThis.fetch = handler;
   const plugin = await import(`./index.js?test=${++sequence}`);
@@ -162,6 +163,22 @@ test("stream rejects previews, unavailable tracks and unexpected download hosts"
     const { plugin } = await setup(async () => response({ code: 200, data: [audio] }));
     await assert.rejects(plugin.stream({ id: "1" }), { code: "unavailable" });
   }
+});
+
+// A trial song falls back to a configured unlock server, and stays rejected
+// while no address is set.
+test("stream falls back to a configured unlock server for trials", async () => {
+  const { plugin } = await setup(async (url, init) => {
+    if (String(url).startsWith("http://unlock.test/song/url/v1")) {
+      assert.deepEqual(JSON.parse(init.body).id, [1]);
+      return response({ code: 200, data: [{ id: 1, url: "https://kugou.example/song.mp3", type: "mp3", br: 320000 }] });
+    }
+    return response({ code: 200, data: [{ id: 1, code: 200, url: "https://m1.music.126.net/song.mp3", type: "mp3", freeTrialInfo: { start: 0, end: 30 } }] });
+  });
+  host.setting = (key) => (key === "unlock" ? "http://unlock.test/" : "");
+  const audio = await plugin.stream({ id: "1" });
+  assert.equal(audio.url, "https://kugou.example/song.mp3");
+  assert.equal(audio.bitRate, 320000);
 });
 
 // Host quality names differ from NetEase's; CDN requests must never get cookies.

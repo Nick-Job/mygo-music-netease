@@ -922,6 +922,39 @@ export async function stream({ id, quality = "high" }) {
   finally { if (pendingStreams.get(key) === pending) pendingStreams.delete(key); }
 }
 
+// unlockedStream asks a self-hosted UnblockNeteaseMusic-style server for a
+// playable URL when NetEase withholds one. It stays silent unless the
+// listener has filled in the unlock server address.
+async function unlockedStream(id, level, quality) {
+  const base = String(host.setting?.("unlock") || "").trim().replace(/\/+$/, "");
+  if (!base) return null;
+  let data;
+  try {
+    const res = await fetch(`${base}/song/url/v1`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: [Number(id)], level, br: 999000 }),
+    });
+    data = await res.json();
+  } catch {
+    return null;
+  }
+  const hit = (Array.isArray(data?.data) ? data.data : []).find((item) => item && (item.url || item.songUrl));
+  const url = hit?.url || hit?.songUrl;
+  if (!url) return null;
+  const type = String(hit.type || "mp3").toLowerCase();
+  return {
+    url: String(url),
+    type,
+    size: Number(hit.size) || 0,
+    bitRate: Number(hit.br) || 0,
+    quality: quality === "lossless" ? "lossless" : quality === "standard" ? "standard" : "high",
+    gain: 0,
+    peak: 0,
+    headers: {},
+  };
+}
+
 async function loadStream(id, quality, generation) {
   const level = { standard: "standard", high: "exhigh", lossless: "lossless" }[quality] || "exhigh";
   let data;
@@ -947,6 +980,8 @@ async function loadStream(id, quality, generation) {
   }
   const audio = (data.data || []).find((item) => String(item.id) === id);
   if (!audio || !audio.url || (audio.code !== undefined && audio.code !== 200) || audio.freeTrialInfo != null) {
+    const unlocked = await unlockedStream(id, level, quality);
+    if (unlocked) return unlocked;
     throw fail("unavailable", "当前账号无完整播放权限，或歌曲在当前地区不可用");
   }
   const url = new URL(secureURL(audio.url));
