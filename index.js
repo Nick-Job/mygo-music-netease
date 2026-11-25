@@ -478,11 +478,20 @@ export async function browse({ page }) {
     const offset = pageOffset(Number(page.slice(6)));
     const data = await request("/api/v1/cloud/get", { limit: PAGE_SIZE, offset }, { keepSession: true });
     if (!Array.isArray(data.data)) throw new Error("网易云未返回有效的云盘列表");
-    const tracks = data.data.map(item => {
+    // Cloud listings expose a slim song object without album artwork. Fetch
+    // the public detail for each ID to restore covers while keeping private
+    // uploads intact when they are absent from the public catalogue.
+    const originals = data.data.map(item => {
       // Private cloud songs may not exist in the public detail catalogue.
       const song = item.simpleSong || {};
-      const track = toTrack({ ...song, id: item.songId, name: item.songName || song.name });
-      if (!song.privilege) track.unavailable = false; // Stream still enforces access/trial checks.
+      return { ...song, id: item.songId, name: item.songName || song.name };
+    });
+    const originalsByID = new Map(originals.map(song => [String(song.id), song]));
+    const tracks = (await songDetails(originals.map(song => song.id), originals, { keepSession: true })).map(song => {
+      const track = toTrack(song);
+      // Cloud songs are the listener's own uploads. Keep private entries
+      // playable in the list; stream still enforces access/trial checks.
+      if (!originalsByID.get(String(song.id))?.privilege) track.unavailable = false;
       return track;
     });
     if (data.hasMore && !tracks.length) throw new Error("网易云未返回完整的云盘列表");
@@ -494,7 +503,9 @@ export async function browse({ page }) {
     const data = await request("/api/v1/play/record", { uid: profile.id, type: week ? 1 : 0 }, { keepSession: true });
     const entries = data[week ? "weekData" : "allData"];
     if (!Array.isArray(entries)) throw new Error("网易云未返回有效的听歌排行");
-    return { title: week ? "最近一周 · 听歌排行" : "所有时间 · 听歌排行", sections: [{ tracks: entries.filter(item => item.song?.id).map(item => toTrack(item.song)), empty: "暂无听歌记录" }] };
+    const songs = entries.filter(item => item.song?.id).map(item => item.song);
+    const tracks = (await songDetails(songs.map(song => song.id), songs, { keepSession: true })).map(toTrack);
+    return { title: week ? "最近一周 · 听歌排行" : "所有时间 · 听歌排行", sections: [{ tracks, empty: "暂无听歌记录" }] };
   }
   if (page === "discovery") {
     return { title: "推荐歌单", sections: [{ playlists: await discoveryPlaylists(), empty: "暂时没有推荐歌单" }] };

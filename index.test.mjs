@@ -695,10 +695,18 @@ test("late liked-list reads cannot overwrite a successful like or unlike", async
   }
 });
 
-test("cloud pages preserve private tracks without public detail lookup", async () => {
+test("cloud pages fill artwork from public detail and keep private uploads playable", async () => {
   const offsets = [];
-  const { plugin } = await setup(async (url) => {
+  const detailIDs = [];
+  const { plugin } = await setup(async (url, init) => {
     if (url.includes('account/get')) return response({ code: 200, profile: { userId: 8, nickname: 'Fixture' } });
+    if (String(url).includes('/eapi/')) {
+      const { path, data } = decode(init.body);
+      assert.equal(path, '/api/v3/song/detail');
+      detailIDs.push(...JSON.parse(data.c).map(item => item.id));
+      // Private uploads are absent from the public detail catalogue.
+      return response({ code: 200, songs: [], privileges: [] });
+    }
     assert.ok(url.includes('/api/v1/cloud/get'));
     const offset=Number(new URL(url).searchParams.get('offset'));offsets.push(offset);
     return response({code:200,data:[{songId:101+offset,songName:'Private',simpleSong:{id:101+offset,fee:1,ar:[],al:{}}}],hasMore:offset===0});
@@ -706,15 +714,22 @@ test("cloud pages preserve private tracks without public detail lookup", async (
   const first=await plugin.browse({page:'cloud:0'});
   assert.equal(first.sections[0].tracks[0].id,'101');
   assert.equal(first.sections[0].tracks[0].unavailable,false);
+  assert.equal(first.sections[0].tracks[0].album.imageUrl,'');
   assert.equal(first.sections[0].morePage,'cloud:1');
   assert.equal((await plugin.browse({page:'cloud:1'})).sections[0].morePage,'');
   assert.deepEqual(offsets,[0,1]);
+  assert.deepEqual(detailIDs,[101,102]);
 });
 
 test("weekly and all-time records use distinct server types and retain rank order", async () => {
   const types=[];
-  const {plugin}=await setup(async url=>{
+  const {plugin}=await setup(async (url,init)=>{
     if(url.includes('account/get'))return response({code:200,profile:{userId:8,nickname:'Fixture'}});
+    if(String(url).includes('/eapi/')){
+      const {data}=decode(init.body);
+      const ids=JSON.parse(data.c).map(item=>item.id);
+      return response({code:200,songs:ids.map(id=>song(id)),privileges:[]});
+    }
     const type=Number(new URL(url).searchParams.get('type'));types.push(type);
     return response({code:200,[type===1?'weekData':'allData']:[{song:song(2)},{song:song(1)}]});
   },{cookies:{MUSIC_U:'synthetic-session'},profile:null});
