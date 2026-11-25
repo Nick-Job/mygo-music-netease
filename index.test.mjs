@@ -748,12 +748,15 @@ test("home prefetches one representative cover for each my-music entry", async (
       return response({ code: 200, [type === 1 ? "weekData" : "allData"]: [{ song: { id: type === 1 ? 5 : 6 } }] });
     }
     if (url.includes("/api/v1/cloud/get")) {
-      return response({ code: 200, data: [{ songId: 7, songName: "Upload", simpleSong: { id: 7 } }] });
+      return response({ code: 200, data: [
+        { songId: 7, songName: "Private", simpleSong: { id: 7 } },
+        { songId: 8, songName: "Public", simpleSong: { id: 8 } },
+      ] });
     }
     if (String(url).includes("/eapi/")) {
       const { data } = decode(init.body);
       const ids = JSON.parse(data.c).map(item => item.id);
-      return response({ code: 200, songs: ids.map(id => ({ id, al: { picUrl: cover } })), privileges: [] });
+      return response({ code: 200, songs: ids.filter(id => id !== 7).map(id => ({ id, al: { picUrl: cover } })), privileges: [] });
     }
     return response({ code: 200, result: { playlists: [] } });
   }, { cookies: { MUSIC_U: "synthetic-session" }, profile: null });

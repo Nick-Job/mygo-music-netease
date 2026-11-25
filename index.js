@@ -464,12 +464,15 @@ async function myMusicCoversFor() {
     const [week, all, cloud] = await Promise.all([
       request("/api/v1/play/record", { uid: profile.id, type: 1 }, { keepSession: true }).catch(() => null),
       request("/api/v1/play/record", { uid: profile.id, type: 0 }, { keepSession: true }).catch(() => null),
-      request("/api/v1/cloud/get", { limit: 1, offset: 0 }, { keepSession: true }).catch(() => null),
+      request("/api/v1/cloud/get", { limit: 5, offset: 0 }, { keepSession: true }).catch(() => null),
     ]);
     const weekSong = Array.isArray(week?.weekData) ? week.weekData[0]?.song : null;
     const allSong = Array.isArray(all?.allData) ? all.allData[0]?.song : null;
-    const cloudSong = Array.isArray(cloud?.data) ? cloud.data[0]?.simpleSong : null;
-    const ids = [weekSong?.id, allSong?.id, cloudSong?.id].filter(Boolean).map(idOf);
+    // Private uploads may lack a public cover. Scan a few cloud entries and
+    // use the first artwork that the public detail catalogue can provide.
+    const cloudSongs = (Array.isArray(cloud?.data) ? cloud.data : [])
+      .map(item => item.simpleSong).filter(song => song?.id);
+    const ids = [weekSong?.id, allSong?.id, ...cloudSongs.map(song => song.id)].filter(Boolean).map(idOf);
     const covers = new Map();
     if (ids.length) {
       const details = await songDetails(ids, [], { keepSession: true }).catch(() => []);
@@ -481,7 +484,7 @@ async function myMusicCoversFor() {
     myMusicCovers = {
       week: covers.get(String(weekSong?.id)) || "",
       all: covers.get(String(allSong?.id)) || "",
-      cloud: covers.get(String(cloudSong?.id)) || "",
+      cloud: cloudSongs.map(song => covers.get(String(song.id))).find(Boolean) || "",
     };
   } catch {
     // Optional decoration: sign-in prompts and network failures keep the
