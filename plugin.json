@@ -8,14 +8,22 @@
   "settings": [
     {
       "key": "unlock",
-      "label": "解锁服务地址",
-      "help": "UnblockNeteaseMusic 风格服务的地址，例如 http://192.168.1.10:3000。留空则不启用。",
-      "type": "text",
-      "link": "https://github.com/UnblockNeteaseMusic/server"
+      "label": "解锁灰色/VIP歌曲",
+      "help": "网易云没有完整播放权限时，自动去酷狗、酷我等平台找可播放的版本。",
+      "type": "boolean"
     }
   ],
   "permissions": {
-    "network": ["music.163.com", "interfacepc.music.163.com", "music.126.net", "*.music.126.net", "*"]
+    "network": [
+      "music.163.com",
+      "interfacepc.music.163.com",
+      "music.126.net",
+      "*.music.126.net",
+      "mobilecdn.kugou.com",
+      "www.kugou.com",
+      "search.kuwo.cn",
+      "antiserver.kuwo.cn"
+    ]
   },
   "navigation": [
     { "title": "发现音乐", "builtin": "home" },

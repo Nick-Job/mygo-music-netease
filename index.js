@@ -922,37 +922,119 @@ export async function stream({ id, quality = "high" }) {
   finally { if (pendingStreams.get(key) === pending) pendingStreams.delete(key); }
 }
 
-// unlockedStream asks a self-hosted UnblockNeteaseMusic-style server for a
-// playable URL when NetEase withholds one. It stays silent unless the
-// listener has filled in the unlock server address.
-async function unlockedStream(id, level, quality) {
-  const base = String(host.setting?.("unlock") || "").trim().replace(/\/+$/, "");
-  if (!base) return null;
-  let data;
+// unlockedStream finds a playable copy of a withheld NetEase song on another
+// platform, entirely on the device: KuGou and Kuwo are asked for the song and
+// the closest match wins. It stays silent while unlocking is turned off.
+async function unlockedStream(id, _level, quality) {
+  if (host.setting?.("unlock") === "false") return null;
+  const meta = await neteaseSong(id);
+  if (!meta) return null;
+  for (const source of unlockSources) {
+    try {
+      const hit = await source(meta);
+      if (hit?.url) {
+        return {
+          url: hit.url,
+          type: hit.type || "mp3",
+          size: Number(hit.size) || 0,
+          bitRate: Number(hit.br) || 0,
+          quality: quality === "lossless" ? "lossless" : quality === "standard" ? "standard" : "high",
+          gain: 0,
+          peak: 0,
+          headers: hit.headers || {},
+        };
+      }
+    } catch {
+      // try the next platform
+    }
+  }
+  return null;
+}
+
+const unlockSources = [unlockKugou, unlockKuwo];
+
+async function neteaseSong(id) {
   try {
-    const res = await fetch(`${base}/song/url/v1`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: [Number(id)], level, br: 999000 }),
-    });
-    data = await res.json();
+    const data = await eapi("/api/v3/song/detail", { c: JSON.stringify([{ id: Number(id) }]) });
+    const song = (data?.songs || [])[0];
+    if (!song?.name) return null;
+    return {
+      title: song.name,
+      artists: (song.ar || []).map((artist) => artist.name).filter(Boolean).join(" "),
+      duration: Number(song.dt) || 0,
+    };
   } catch {
     return null;
   }
-  const hit = (Array.isArray(data?.data) ? data.data : []).find((item) => item && (item.url || item.songUrl));
-  const url = hit?.url || hit?.songUrl;
+}
+
+async function unlockKugou(meta) {
+  const keyword = `${meta.title} ${meta.artists}`.trim();
+  const search = await json(`https://mobilecdn.kugou.com/api/v3/search/song?format=json&keyword=${encodeURIComponent(keyword)}&page=1&pagesize=10&showtype=1`);
+  const hit = bestMatch(search?.data?.info || [], meta, (item) => ({
+    id: item.hash,
+    title: item.songname,
+    artist: item.singername,
+    duration: Number(item.duration) * 1000,
+  }));
+  if (!hit?.id) return null;
+  const play = await json(`https://www.kugou.com/yy/index.php?r=play/getdata&hash=${encodeURIComponent(hit.id)}`, { Referer: "https://www.kugou.com/" });
+  const url = play?.data?.play_url;
   if (!url) return null;
-  const type = String(hit.type || "mp3").toLowerCase();
   return {
     url: String(url),
-    type,
-    size: Number(hit.size) || 0,
-    bitRate: Number(hit.br) || 0,
-    quality: quality === "lossless" ? "lossless" : quality === "standard" ? "standard" : "high",
-    gain: 0,
-    peak: 0,
-    headers: {},
+    type: guessType(url) || "mp3",
+    size: Number(play.data.filesize) || 0,
+    br: Number(play.data.bitrate) || 0,
+    headers: { Referer: "https://www.kugou.com/" },
   };
+}
+
+async function unlockKuwo(meta) {
+  const keyword = `${meta.title} ${meta.artists}`.trim();
+  const search = await json(`https://search.kuwo.cn/r.s?client=kt&all=${encodeURIComponent(keyword)}&pn=0&rn=10&uid=0&ver=kwplayer_ar_9.2.2.1&vipver=1&ft=music&cluster=0&strategy=2012&encoding=utf8&rformat=json&mobi=1`, { Referer: "https://www.kuwo.cn/" });
+  const hit = bestMatch(search?.abslist || [], meta, (item) => ({
+    id: item.MUSICRID,
+    title: item.SONGNAME,
+    artist: item.ARTIST,
+    duration: Number(item.DURATION) * 1000,
+  }));
+  if (!hit?.id) return null;
+  const res = await fetch(`https://antiserver.kuwo.cn/anti.s?type=convert_url&format=mp3|aac&rid=${encodeURIComponent(hit.id)}&response=url`, { headers: { "User-Agent": UA, Referer: "https://www.kuwo.cn/" } });
+  const url = String(await res.text()).trim();
+  if (!/^https?:\/\//i.test(url)) return null;
+  return { url, type: guessType(url) || "mp3", size: 0, br: 0, headers: { Referer: "https://www.kuwo.cn/" } };
+}
+
+async function json(url, headers = {}) {
+  const res = await fetch(url, { headers: { "User-Agent": UA, ...headers } });
+  if (!res.ok) return null;
+  return res.json();
+}
+
+function bestMatch(list, meta, pick) {
+  const title = norm(meta.title);
+  const artist = norm(meta.artists);
+  let first = null;
+  for (const raw of list) {
+    const candidate = pick(raw);
+    if (!candidate?.title) continue;
+    if (!first) first = candidate;
+    const candidateTitle = norm(candidate.title);
+    const titleHit = candidateTitle === title || candidateTitle.includes(title) || title.includes(candidateTitle);
+    if (!titleHit) continue;
+    const candidateArtist = norm(candidate.artist || "");
+    const artistHit = !artist || !candidateArtist || candidateArtist === artist || candidateArtist.includes(artist) || artist.includes(candidateArtist);
+    if (artistHit) return candidate;
+  }
+  return first;
+}
+
+const norm = (text) => String(text || "").toLowerCase().replace(/[\s\-_()[\]（）【】·.,，。!！?？'"“”‘’]/g, "");
+
+function guessType(url) {
+  const match = /\.(mp3|flac|ogg|m4a|aac|wav|mp4)(?:\?|$)/i.exec(url);
+  return match ? match[1].toLowerCase() : "";
 }
 
 async function loadStream(id, quality, generation) {

@@ -165,20 +165,26 @@ test("stream rejects previews, unavailable tracks and unexpected download hosts"
   }
 });
 
-// A trial song falls back to a configured unlock server, and stays rejected
-// while no address is set.
-test("stream falls back to a configured unlock server for trials", async () => {
+// A trial song is unlocked from another platform on the device, without a
+// server, and stays rejected while unlocking is turned off.
+test("stream unlocks a trial song from another platform on the device", async () => {
   const { plugin } = await setup(async (url, init) => {
-    if (String(url).startsWith("http://unlock.test/song/url/v1")) {
-      assert.deepEqual(JSON.parse(init.body).id, [1]);
-      return response({ code: 200, data: [{ id: 1, url: "https://kugou.example/song.mp3", type: "mp3", br: 320000 }] });
+    const address = String(url);
+    if (address.includes("kugou.com/yy/index.php")) {
+      return response({ data: { play_url: "https://kugou.example/song.mp3", filesize: 100, bitrate: 320 } });
+    }
+    if (address.includes("mobilecdn.kugou.com")) {
+      return response({ data: { info: [{ hash: "ABC", songname: "Song 1", singername: "Artist", duration: 180 }] } });
+    }
+    const { path } = decode(init.body);
+    if (path === "/api/v3/song/detail") {
+      return response({ code: 200, songs: [{ name: "Song 1", ar: [{ name: "Artist" }], dt: 180000 }] });
     }
     return response({ code: 200, data: [{ id: 1, code: 200, url: "https://m1.music.126.net/song.mp3", type: "mp3", freeTrialInfo: { start: 0, end: 30 } }] });
   });
-  host.setting = (key) => (key === "unlock" ? "http://unlock.test/" : "");
   const audio = await plugin.stream({ id: "1" });
   assert.equal(audio.url, "https://kugou.example/song.mp3");
-  assert.equal(audio.bitRate, 320000);
+  assert.equal(audio.bitRate, 320);
 });
 
 // Host quality names differ from NetEase's; CDN requests must never get cookies.
@@ -367,10 +373,13 @@ test("stream does not retry expired authentication or trial audio", async () => 
     { code: 301 },
     { code: 200, data: [{ id: 1, url: "https://m1.music.126.net/song.mp3", freeTrialInfo: { start: 0, end: 30 } }] },
   ]) {
-    let calls = 0;
-    const { plugin } = await setup(async () => { calls++; return response(body); });
+    let playerCalls = 0;
+    const { plugin } = await setup(async (_url, init) => {
+      if (decode(init.body).path === "/api/song/enhance/player/url/v1") playerCalls++;
+      return response(body);
+    });
     await assert.rejects(plugin.stream({ id: "1" }));
-    assert.equal(calls, 1);
+    assert.equal(playerCalls, 1);
   }
 });
 
