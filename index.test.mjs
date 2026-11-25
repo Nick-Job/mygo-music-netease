@@ -308,7 +308,9 @@ test("server cookie deletion clears persisted state and cannot return after relo
 
 // A positive Max-Age overrides Expires and must persist the replacement cookie.
 test("normal cookie renewal remains persisted", async () => {
-  const { plugin, storage } = await setup(async () => response({ code: 200, result: [] }, [
+  const { plugin, storage } = await setup(async (url) => url.includes("account/get")
+    ? response({ code: 200, profile: { userId: 8, nickname: "Fixture" } })
+    : response({ code: 200, result: [] }, [
     "MUSIC_U=synthetic-renewed; Max-Age=3600; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/",
   ]), { cookies: { MUSIC_U: "synthetic-old" }, profile: null });
   await plugin.home();
@@ -735,6 +737,30 @@ test("weekly and all-time records use distinct server types and retain rank orde
   },{cookies:{MUSIC_U:'synthetic-session'},profile:null});
   for(const page of ['record:week','record:all'])assert.deepEqual((await plugin.browse({page})).sections[0].tracks.map(t=>t.id),['2','1']);
   assert.deepEqual(types,[1,0]);
+});
+
+test("home prefetches one representative cover for each my-music entry", async () => {
+  const cover = "http://p3.music.126.net/home.jpg";
+  const { plugin } = await setup(async (url, init) => {
+    if (url.includes("account/get")) return response({ code: 200, profile: { userId: 8, nickname: "Fixture" } });
+    if (url.includes("/api/v1/play/record")) {
+      const type = Number(new URL(url).searchParams.get("type"));
+      return response({ code: 200, [type === 1 ? "weekData" : "allData"]: [{ song: { id: type === 1 ? 5 : 6 } }] });
+    }
+    if (url.includes("/api/v1/cloud/get")) {
+      return response({ code: 200, data: [{ songId: 7, songName: "Upload", simpleSong: { id: 7 } }] });
+    }
+    if (String(url).includes("/eapi/")) {
+      const { data } = decode(init.body);
+      const ids = JSON.parse(data.c).map(item => item.id);
+      return response({ code: 200, songs: ids.map(id => ({ id, al: { picUrl: cover } })), privileges: [] });
+    }
+    return response({ code: 200, result: { playlists: [] } });
+  }, { cookies: { MUSIC_U: "synthetic-session" }, profile: null });
+  const home = await plugin.home();
+  const links = home.sections.find(section => section.title === "我的音乐").links;
+  const expected = "https://p3.music.126.net/home.jpg?param=%7Bsize%7Dy%7Bsize%7D";
+  assert.deepEqual(links.map(link => link.imageUrl), [expected, expected, expected]);
 });
 
 test("hot comments and chronological pagination never skip or duplicate comments", async () => {

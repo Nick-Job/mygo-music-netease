@@ -33,6 +33,7 @@ let likedCache = null;
 let likedRevision = 0;
 const pendingStreams = new Map();
 let discoveryCovers = null;
+let myMusicCovers = null;
 let heartState = null;
 let pendingHeart = null;
 let commentSnapshot = null;
@@ -124,6 +125,7 @@ function clearSession() {
   session = { cookies: {}, profile: null };
   profileCheckedAt = 0;
   likedCache = null;
+  myMusicCovers = null;
   pendingStreams.clear();
   heartState = null;
   pendingHeart = null;
@@ -451,15 +453,54 @@ async function discoverySection() {
   }
 }
 
+// The home links for play records and the cloud drive come from slim listing
+// responses without album artwork. Prefetch one representative song per entry
+// and reuse the public detail response to restore the decorative covers.
+async function myMusicCoversFor() {
+  if (myMusicCovers) return myMusicCovers;
+  try {
+    const profile = await account();
+    if (!profile) throw fail("signIn", "请先扫码登录网易云音乐");
+    const [week, all, cloud] = await Promise.all([
+      request("/api/v1/play/record", { uid: profile.id, type: 1 }, { keepSession: true }).catch(() => null),
+      request("/api/v1/play/record", { uid: profile.id, type: 0 }, { keepSession: true }).catch(() => null),
+      request("/api/v1/cloud/get", { limit: 1, offset: 0 }, { keepSession: true }).catch(() => null),
+    ]);
+    const weekSong = Array.isArray(week?.weekData) ? week.weekData[0]?.song : null;
+    const allSong = Array.isArray(all?.allData) ? all.allData[0]?.song : null;
+    const cloudSong = Array.isArray(cloud?.data) ? cloud.data[0]?.simpleSong : null;
+    const ids = [weekSong?.id, allSong?.id, cloudSong?.id].filter(Boolean).map(idOf);
+    const covers = new Map();
+    if (ids.length) {
+      const details = await songDetails(ids, [], { keepSession: true }).catch(() => []);
+      for (const song of details) {
+        const image = toTrack(song).album.imageUrl;
+        if (image) covers.set(String(song.id), image);
+      }
+    }
+    myMusicCovers = {
+      week: covers.get(String(weekSong?.id)) || "",
+      all: covers.get(String(allSong?.id)) || "",
+      cloud: covers.get(String(cloudSong?.id)) || "",
+    };
+  } catch {
+    // Optional decoration: sign-in prompts and network failures keep the
+    // navigation links usable without cover art.
+    myMusicCovers = { week: "", all: "", cloud: "" };
+  }
+  return myMusicCovers;
+}
+
 export async function home() {
   const recommendations = await discoverySection();
+  const covers = await myMusicCoversFor();
   return {
     title: "发现音乐", subtitle: "网易云音乐 · 发现喜欢的音乐",
     sections: [
       { title: "我的音乐", links: [
-        { title: "最近一周", subtitle: "听歌排行", page: "record:week" },
-        { title: "所有时间", subtitle: "听歌排行", page: "record:all" },
-        { title: "音乐云盘", subtitle: "我的云盘歌曲", page: "cloud:0" },
+        { title: "最近一周", subtitle: "听歌排行", page: "record:week", imageUrl: covers.week },
+        { title: "所有时间", subtitle: "听歌排行", page: "record:all", imageUrl: covers.all },
+        { title: "音乐云盘", subtitle: "我的云盘歌曲", page: "cloud:0", imageUrl: covers.cloud },
       ] },
       { title: "为你推荐", links: [
         { title: "每日推荐", subtitle: "每天更新，为你推荐好音乐", page: "daily", imageUrl: discoveryCover(0) },
@@ -494,6 +535,8 @@ export async function browse({ page }) {
       if (!originalsByID.get(String(song.id))?.privilege) track.unavailable = false;
       return track;
     });
+    const cloudCover = tracks.find(track => track.album.imageUrl)?.album.imageUrl;
+    if (cloudCover && myMusicCovers) myMusicCovers.cloud = cloudCover;
     if (data.hasMore && !tracks.length) throw new Error("网易云未返回完整的云盘列表");
     return { title: "音乐云盘", sections: [{ tracks, empty: "云盘暂无歌曲", morePage: data.hasMore ? `cloud:${offset + tracks.length}` : "" }] };
   }
@@ -505,6 +548,8 @@ export async function browse({ page }) {
     if (!Array.isArray(entries)) throw new Error("网易云未返回有效的听歌排行");
     const songs = entries.filter(item => item.song?.id).map(item => item.song);
     const tracks = (await songDetails(songs.map(song => song.id), songs, { keepSession: true })).map(toTrack);
+    const recordCover = tracks[0]?.album.imageUrl;
+    if (recordCover && myMusicCovers) myMusicCovers[week ? "week" : "all"] = recordCover;
     return { title: week ? "最近一周 · 听歌排行" : "所有时间 · 听歌排行", sections: [{ tracks, empty: "暂无听歌记录" }] };
   }
   if (page === "discovery") {
